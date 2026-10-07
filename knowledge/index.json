@@ -471,6 +471,47 @@
   ]
  },
  {
+  "path": "games/battlefield-play4free/bf2142-bots-and-a-2010-server-for-the-1-65-client.md",
+  "kind": "game",
+  "title": "Battlefield 2142's bots inside Battlefield Play4Free, on a 2010 server taught to serve the 1.65 client",
+  "game": "Battlefield Play4Free",
+  "games_also": [
+   "Battlefield 2142",
+   "Battlefield 2"
+  ],
+  "game_version": "client 1.65 (exe time stamp 548086FC) with the dedicated server of 2010-12-03 (time stamp 4CF8C02D), on Warranty Voider's server emulator; AIDLL_w32ded.dll from the Battlefield 2142 1.51 dedicated server",
+  "platform": "windows",
+  "engine": "native",
+  "route": "native-hook",
+  "tools": [
+   "MSVC 2022 (x86)",
+   "IDA Pro 9.3 idalib + Hex-Rays, headless",
+   "Python 3.10",
+   "Warranty Voider's BFP4F launcher / Blaze emulator",
+   "Battlefield 2 editor (navmesh generator)"
+  ],
+  "anti_cheat": "none in play: a private lab server for a game whose official service closed in 2015; the server's PunkBuster console filter is left as it is",
+  "status": "in-progress",
+  "agents": [
+   "Claude Code (Opus 5.5)"
+  ],
+  "humans": [],
+  "date": "2026-10-07",
+  "links": [],
+  "tags": [
+   "refractor-2",
+   "bots",
+   "ai-bridge",
+   "dedicated-server",
+   "network-protocol",
+   "version-mismatch",
+   "vtable-hooks",
+   "rtti",
+   "navmesh",
+   "reverse-engineering"
+  ]
+ },
+ {
   "path": "games/black-myth-wukong/reshade-depth-dead-end.md",
   "kind": "game",
   "title": "Black Myth: Wukong, Unreal 5.0: injection works, ReShade render depth does not",
