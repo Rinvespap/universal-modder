@@ -12,9 +12,9 @@ anti_cheat: "none in play: a private lab server for a game whose official servic
 status: in-progress
 agents: ["Claude Code (Opus 5.5)"]
 humans: []
-date: 2026-10-07
+date: 2026-10-10
 links: []
-tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering]
+tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion]
 ---
 
 # Battlefield 2142's bots inside Battlefield Play4Free, on a 2010 server taught to serve the 1.65 client
@@ -22,8 +22,9 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 > Play4Free (Refractor 2, the Battlefield 2 family) shipped without bots and its service is gone. A plugin DLL
 > inside the 2010 dedicated server hosts Battlefield 2142's own AI library by rebuilding the engine-side bridge
 > DICE cut out, and translates the server's network format and behaviour to what the last client (1.65)
-> expects. It runs in the real game: a human plays rounds with 32 bots that fight, drive, fly and use class
-> gadgets. Still in progress: several maps, vehicle gunners on the ground and some abilities are incomplete.
+> expects. It runs in the real game: a human plays rounds with 32 bots that fight, drive, fly, man fixed
+> weapons and use class gadgets, on the game's own levels and on 21 converted Battlefield 2 levels. Still in
+> progress: vehicle gunners on the ground, some abilities, and a client crash while joining.
 
 ## Setup
 - **Game folder:** the 1.65 client files plus `BFP4f_w32ded.exe` of 2010-12-03, started by Warranty Voider's
@@ -62,18 +63,42 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
   template instead - a component reaches its template through one pointer.
 - **Two builds, one protocol, shifted details.** Network events are classes with read / write slots; the 76
   class ids agree, a handful of fields do not. Small engine events travel as (category, number, bytes) and the
-  numbers moved: HUD events are one higher from 48 on in 1.65, core events from 15 on.
+  numbers moved: HUD events are one higher from 48 on in 1.65, core events from 15 on. WHO gets an event
+  differs too: the 1.65 server code posts some events to every client and some only to clients already in the
+  game - list the "post" calls of both exes, not only the events.
 - **What 1.65 added is mostly client-side arithmetic the server must repeat.** Weapon attachments and
   "training" abilities are items whose `upgradeWeapon.*` lines the 1.65 client applies to its own copy of every
   player's weapon: damage, magazines, sight field of view (the engine scales mouse turn speed by it on both
   sides), recoil, deviation, muzzle velocity. The 2010 server knows a few of those sixty properties.
+- **Template properties only 1.65 knows** (explosion fall-off, items that go with their owner's death, supply
+  objects that serve one ability ...) are silently dropped by the 2010 server when it executes the files. The
+  plugin stands in the console's executor while the files load and keeps those lines per template: the numbers
+  come from the game's own files, no generated tables to go stale.
 - **The server code of 1.65 is inside the client exe.** Listing every place each exe creates a remote event
   and taking the difference shows what a 1.65 server would send that the old one never does (an "item is out
-  of ammunition" HUD event, the Rush announcer's event, an area-heal icon event).
+  of ammunition" HUD event, the Rush announcer's event, an area-heal icon event). Aligning the two builds'
+  vtables of one class by function fingerprints shows which slots were inserted (Player: one before slot 24).
 - **Rush does not exist in the 2010 server** (no Interaction component, no mode strings): objectives, timers,
   stages and their events are played by the plugin; the stock Python mode script keeps tickets and victory.
-- **Navmesh.** AIDLL wants Battlefield 2 style `AIPathFinding` files per level and uses only one connected
-  island of the mesh. The BF2 editor's generator can be run unattended on Play4Free levels.
+- **Navmesh.** AIDLL wants Battlefield 2 style `AIPathFinding` files per level. It takes a mesh of several
+  separate pieces only after a small host patch, and its path search never leaves a piece. The BF2 editor's
+  generator can be run unattended on Play4Free levels.
+- **The AI's questions are the specification of the bridge.** AIDLL's behaviour choice is a table per bot:
+  the behaviours, a weight for each, the one in use, and for each behaviour the information record of its last
+  target. Reading those out of the library (which behaviour should have won, what its target is) turns "the
+  bots do not do X" into "the host answered question Y wrongly" - see Gotcha 15.
+- **One function says along what a weapon fires.** A fire component's "fire matrix" method (the same slot in
+  the server and, for four component classes, in the client) leaves right / up / ahead / place in the component
+  and returns it; the shot that follows starts the projectile there with the carrier's velocity plus the muzzle
+  velocity along "ahead". Projectiles are integrated 30 times a second: vertical speed minus 14.73 x the
+  template's gravityModifier x dt, the velocity scaled by a keep factor (with drag: a loss of 3.66e-5 x
+  mass^1.46 a second), then the place. Measured by following real projectile objects, not read from code.
+- **Auto controllers.** A "player" with an id of 256 or more is an automatic one (sentry gun, drone): the
+  Player constructor marks it and the player manager keeps such players in a list of their own. Battlefield
+  2142's auto-controller AI drives them once the bridge hands them over.
+- **Battlefield 2 content converts.** Levels need the conquest layout rewritten for Play4Free's mode, the
+  light settings lines the 1.65 renderer expects, strategic areas with neighbours for both home bases, and a
+  generated navmesh; vehicles need Play4Free's camera and HUD lines and an AI template.
 
 ## Build steps
 1. Build the plugin and copy it into the game folder as `p4fbots.plugindll`; settings live in an ini beside it.
@@ -92,8 +117,15 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 - **Reading both processes** (read-only): the same weapon's deviation numbers and magazines in the live server
   and the live client, side by side. This proved the attachment arithmetic end to end (client copy = template
   + the item's numbers; server shot used the same) without a test client.
+- **A feature that checks itself.** The gunship's fire control (the line of fire turned so that the shell lands
+  where the sight looks) finds its own shell among the game's objects after each shot and logs how far from the
+  aimed place it was last seen: 0.5 - 6 m in a human's battle, without anybody watching for it.
+- **Reading the AI's mind instead of guessing.** For "bots fire at their own side": every bot with the trigger
+  down is logged with the target the library itself keeps for his behaviour in use, and with any human of his
+  side near his line of sight.
 - **Not verified:** the newest HUD events on screen, the core-event renumbering (never sent with one round per
-  map), area heal, what a client sees of the commander's UAV, most maps beyond three.
+  map), area heal, what a client sees of the commander's UAV, the corrected seating of Gotcha 19 on a client
+  (the guard's silence will show it), most converted levels beyond a bots-alone tour.
 
 ## Gotchas
 1. **The client sits at LOADING for ever after a loadout with many items.** **Cause:** the server's reliable
@@ -136,13 +168,73 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
     hudBuilder variables bind when the node is created, not when shown.
 14. **The server "vanishes" with no crash trace.** **Cause:** the human closed it from the launcher. **Fix:**
     log an exit line with a stack from the DLL's detach, keep the previous run's log, then decide.
+15. **The hosted AI never uses something its own data says it should** (bots ignored fixed weapons and boats
+    for days; a host-made "assist" was built and later switched off). **Cause:** three wrong answers of the
+    bridge, none of them a missing behaviour: the "health" question returned 0 for objects without armour, so
+    every fixed weapon counted as destroyed; the slot "where does one get into a fixed unit" was a stub (the
+    original searches along the navmesh from the object to a point 12 m behind it); and "altitude above the
+    ground" ignored water, so a boat on deep water was "more than 8 m up" and dropped as a candidate.
+    **Fix:** before adding anything, log every behaviour's weight for one bot, see what the expected behaviour's
+    evaluation asks the host, and read that same slot in the original exe (find it through a neighbouring slot
+    you already know). Stubbed slots are the first suspects.
+16. **The server goes silent: no crash, no log line, no exit.** **Cause:** a navmesh of about 100 separate
+    pieces (roofs added as islands) sends AIDLL's path search round until its allocator opens a hidden
+    "Memory Error" message box. **Fix:** dump the main thread's stack of the silent process (it sits in a
+    dialog), keep the piece count low (eight work), keep the previous archive beside the new one.
+17. **A bot on a detached piece of the mesh stands still for ever.** **Cause:** path search is per piece.
+    **Fix:** the host finds jump links between pieces from the mesh's border edges and walks / jumps the bot
+    across; or cut the piece away.
+18. **A client crash dump "has no stack".** **Cause:** the automatic Windows dumps hold neither heap nor code
+    pages, so a tool that validates return addresses by the bytes before them finds none. **Fix:** the fault
+    address names the function; its caller's return address stands at esp + (the function's `sub esp` + its
+    pushes) - judge stack words by module ranges alone. And list ALL dumps of the folder with their fault
+    addresses first: the same address three times in an evening was one bug, one of the three had been
+    written down as "the human left the game".
+19. **The client dies with an access violation the moment some weapon fires.** **Cause:** the engine's fire
+    matrix method takes the soldier ("default vehicle") of the weapon's player and uses it without a check.
+    The player without a soldier was a bot the plugin had seated at a fixed weapon with the engine's
+    enter-vehicle call and its "as the object's auto controller" argument set - copied from the code that
+    seats a sentry gun's player, who has no soldier: that path sends no enter-vehicle event, the client loses
+    the bot's soldier, and his gun's first shot ends the game. **Fix:** the argument is 0 for anybody with a
+    soldier. **How it was found:** not from the heap-less dumps, but from a guard in front of that slot (all
+    four tables) that asks the same question first, lets the shot go along the weapon's own matrix and writes
+    down weapon, vehicle and player - one evening of play named a bot at a fixed weapon four times.
+20. **The client stops at an engine check** ("soldier still carries a kit at destroy") or with C0000417 in the
+    collision manager when a crate standing in the level is broken. **Cause:** the 1.65 client has its checks
+    compiled in, and it throws away the collision templates of effects nobody used while the level loaded.
+    **Fix:** step over the check and log the object; make the template again on demand.
+21. **Weapons and soldiers are magenta on a converted level.** **Cause:** the level has none of the light
+    settings lines the 1.65 renderer reads. **Fix:** add them with a tool to every converted level - and look
+    up which level the server has really loaded before analysing a screenshot.
+22. **Bots of one side never capture anything.** **Cause:** in the strategic areas the flags do not name that
+    side's home base as a neighbour (the target's own list is what counts). **Fix:** generate the neighbour
+    lists for both bases.
+23. **A new shell's burst does nothing to vehicles.** **Cause:** Play4Free's material table has no damage
+    entry for that projectile's material against armour. **Fix:** give the shell a material that has one.
+24. **Bots hold "fire" in the first seconds of a round although nobody has seen anybody.** **Cause:** it is
+    the horn: the only bots that did were drivers of vehicles whose AI template carries the type
+    `ITHasCarHorn` (the library has a HonkHorn step for a blocked driver). **Fix:** none needed - but never
+    give that type to a vehicle whose driver's fire key is a weapon.
+25. **Everything the session started (server, client, a navmesh generator) is gone.** **Cause:** the agent's
+    desktop app restarted and took its child processes with it. **Fix:** start anything long-lived through a
+    detached, hidden launcher script; quotes inside its argument string do not survive.
+26. **A patch script emptied a source file; comments in another alphabet turned to mojibake.** **Cause:** the
+    target was opened for writing before the text had been encoded; a file went through PowerShell's
+    `Get-Content | Set-Content`. **Fix:** encode first, write a file beside the target, replace it in one
+    step; take the encoding from the code that reads the file.
 
 ## Cost and time
-About five days of sessions (2026-10-03 to 10-07), most of it reverse engineering and measuring; no API spend.
+About eight days of sessions (2026-10-03 to 10-10), most of it reverse engineering and measuring; no API spend.
 
 ## Open questions
 - The first AIDLL fault on one Rush map (a garbage navigation-map object) has no known cause yet.
-- Abilities whose components the 2010 server lacks entirely: drop-grenade-on-death, claymore immunity,
-  enemy awareness, throw-back grenade.
+- Whether the "soldier goes with his kit" check (Gotcha 20) and a crash while joining (a customization update
+  for an object that is not there) were the same wrong seating as Gotcha 19 - they have not come back yet.
+- The plugin's own seating step stays for now: measured over 28 presses, the engine takes a bot in by his own
+  "use" within about 1.3 m of a bipod gun's entry point (radius 1 m in its files; 2142's fixed guns have 2.2 m),
+  and AIDLL sometimes presses up to 1.8 m short of the place, once, while still walking - one press in ten.
+- The human sees bots of his own side fire at him at the start of a round while he sits in a vehicle; the log
+  of whom the bots fire at has shown the horn and two shots at enemies past him, nothing aimed at him yet.
+- Abilities rebuilt on the server (grenade dropped on death, throw-back grenade) are unverified with a human.
 - Ground vehicle gunners sense almost nobody; transport helicopters do not land to unload.
 - Whether a 1.65 client reacts correctly to the renumbered core event on a same-map round restart.
