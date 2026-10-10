@@ -496,7 +496,7 @@
    "Claude Code (Opus 5.5)"
   ],
   "humans": [],
-  "date": "2026-10-07",
+  "date": "2026-10-10",
   "links": [],
   "tags": [
    "refractor-2",
@@ -508,7 +508,10 @@
    "vtable-hooks",
    "rtti",
    "navmesh",
-   "reverse-engineering"
+   "reverse-engineering",
+   "crash-dumps",
+   "ballistics",
+   "level-conversion"
   ]
  },
  {
