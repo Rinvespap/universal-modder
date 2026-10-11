@@ -12,7 +12,7 @@ anti_cheat: "none in play: a private lab server for a game whose official servic
 status: in-progress
 agents: ["Claude Code (Opus 5.5)"]
 humans: []
-date: 2026-10-10
+date: 2026-10-11
 links: []
 tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion]
 ---
@@ -23,8 +23,10 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 > inside the 2010 dedicated server hosts Battlefield 2142's own AI library by rebuilding the engine-side bridge
 > DICE cut out, and translates the server's network format and behaviour to what the last client (1.65)
 > expects. It runs in the real game: a human plays rounds with 32 bots that fight, drive, fly, man fixed
-> weapons and use class gadgets, on the game's own levels and on 21 converted Battlefield 2 levels. Still in
-> progress: vehicle gunners on the ground, some abilities, and a client crash while joining.
+> weapons, use class gadgets, form squads under a commander and ferry each other by helicopter, on the game's
+> own levels (Rush included) and on about twenty converted Battlefield 2 levels. A copy for other people, with
+> the plugin's source, is made by a packaging script. Still in progress: vehicle gunners on the ground, the
+> second round on a map, bots that leave a vehicle they have just entered.
 
 ## Setup
 - **Game folder:** the 1.65 client files plus `BFP4f_w32ded.exe` of 2010-12-03, started by Warranty Voider's
@@ -96,6 +98,17 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 - **Auto controllers.** A "player" with an id of 256 or more is an automatic one (sentry gun, drone): the
   Player constructor marks it and the player manager keeps such players in a list of their own. Battlefield
   2142's auto-controller AI drives them once the bridge hands them over.
+- **The engine kept more of 2142 than it shows.** Play4Free's squad manager and commander-tools manager are
+  alive in the server; only the menus were removed. Feeding them (instead of a squad list of the plugin's own)
+  gave squads, leaders, orders and commander tools that the client draws by itself. Map and name-tag features
+  of the older game are cut in three places at once: a mask in the client's code, the loading of the pictures,
+  and the pictures themselves - all three have to be put back.
+- **What a projectile does is an interface too.** The library's collision handler wants to be told of every
+  hit, shot, heal and sighting; until the host calls it bots do not react to being shot at from behind.
+- **Mines are a manager, not a behaviour.** The host reports every mine with a reach; twice a second the library
+  asks "does this object lie still" and then makes the navmesh polygons under it five times as expensive.
+- **To the AI a vehicle is a circle** (its physics sphere). A helicopter's circle is smaller than its hull: the
+  tail boom lies outside it, and a bot on foot walks into it (Gotcha 30).
 - **Battlefield 2 content converts.** Levels need the conquest layout rewritten for Play4Free's mode, the
   light settings lines the 1.65 renderer expects, strategic areas with neighbours for both home bases, and a
   generated navmesh; vehicles need Play4Free's camera and HUD lines and an AI template.
@@ -123,6 +136,11 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 - **Reading the AI's mind instead of guessing.** For "bots fire at their own side": every bot with the trigger
   down is logged with the target the library itself keeps for his behaviour in use, and with any human of his
   side near his line of sight.
+- **Count the reasons for "never".** A host rule that never fires gets a counter per reason it declined; one
+  bots-alone run then says which condition is wrong (a "bot is in a fight" test judged by the behaviour's name
+  refused 606 of 796 chances; judged by the library's own trigger wish it worked).
+- **A controller needs a trace line, not a look.** Half-second lines of wanted against actual (place, speed,
+  attitude, sticks) for every helicopter the host flies turned one played round into the data for tuning.
 - **Not verified:** the newest HUD events on screen, the core-event renumbering (never sent with one round per
   map), area heal, what a client sees of the commander's UAV, the corrected seating of Gotcha 19 on a client
   (the guard's silence will show it), most converted levels beyond a bots-alone tour.
@@ -222,9 +240,47 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
     target was opened for writing before the text had been encoded; a file went through PowerShell's
     `Get-Content | Set-Content`. **Fix:** encode first, write a file beside the target, replace it in one
     step; take the encoding from the code that reads the file.
+27. **The hosted AI faults in a human's game but never in bots-alone runs.** **Cause:** a vehicle kind (the
+    boat) was mapped to a navigation cluster graph the level does not register; the library then reads a layer
+    number from memory nobody wrote - 160 000 wrong lookups in five minutes, a fault only when that memory is
+    not mapped. **Fix:** choose the graph per level; and put a bounds-checking stand-in that LOGS in front of
+    the table - it shows the wrong lookups that never fault.
+28. **The client is thrown back to the menu when something ordinary happens** (a squad changes). **Cause:** one
+    event of the old server is unreadable for the new client, which drops the connection; the backend's log
+    holds only a "context" number. **Fix:** that number is the reason (29 = packet unreadable); log the event
+    classes of every packet on the server to name the event, then compare its read / write in both builds.
+29. **Bots cannot reach an objective one floor up.** **Cause:** a host "assist" walked the bot the last metres
+    in a straight line. **Fix:** every walk the host makes asks the navmesh for the way.
+30. **Bots stand at a helicopter's tail until they are removed.** **Cause:** a vehicle is a circle to the AI (see above), and the tail boom is outside it; a bot blocked for about nine seconds is given up on by the library. **Fix:** for any bot on foot
+    beside a standing helicopter the host steers along the hull's box (out sideways first, then along it).
+31. **The library's own troop transport drops everybody from 40 m and lets the helicopter fall.** **Fix:** the
+    host flies transports: the pilot's own "bail out" radio line is kept back and used as the trigger; land or
+    hover low by the threat at the place, only passengers leave. **What the controller needed:** attitude
+    follows the stick about 1.5 s late (slew the wanted tilt, damp by the turn rate), hover trim measured in
+    flight, a NEGATIVE collective to really descend; for a circle flown sideways with the nose on its centre,
+    v^2 = g x height makes the bank that holds the circle equal to the angle down to the centre.
+32. **A behaviour is never chosen although the bridge answers its questions.** **Cause:** the plan is only
+    built for a bot whose weapon has a certain AI type (2142's mine-defusing tool); no weapon of this game has
+    it. **Fix:** read the plan builder's precondition before debugging answers; give the bots the same result
+    another way (they shoot enemy mines) and leave the dead switch off.
+33. **Bots ignore ladders / fall into an empty pool and stay.** **Cause:** generated meshes have no ladder
+    polygons, and most ladders are parts of other objects (65 of 71 on one level were found only by walking
+    the object trees). **Fix:** a tool adds ladder polygons; the host climbs. Moving a bot by setting its
+    position counts as movement for the engine and as "stuck" for the library - steer it instead.
+34. **A client that joins while a bots-alone battle is running stays at LOADING.** Open. The normal start
+    (bots are created when the first human enters - which the 1.65 client also needs to draw their name tags)
+    works; do not leave a bots-alone test server up for a human.
+35. **The lab folder is not a release.** It holds every session's logs, screenshots, the player's saved
+    choices by name, backup and trial archives, a Windows profile path in two tool constants, and 200 comments
+    quoting the human's requests. **Fix:** a packaging script: exclusion rules, a settings file written anew
+    (described in English, values taken from the live one, test switches off), the quotes cut out of the copy
+    (a rule where quote and attribution can simply go, a hand-written replacement keyed by the quote's hash
+    where the sentence needs its sense kept - translating them was not what the human wanted), and a read-back
+    that searches text files, executables and the text members of every archive for the profile path and a
+    list of private words, and compiles every script of the copy.
 
 ## Cost and time
-About eight days of sessions (2026-10-03 to 10-10), most of it reverse engineering and measuring; no API spend.
+About nine days of sessions (2026-10-03 to 10-11), most of it reverse engineering and measuring; no API spend.
 
 ## Open questions
 - The first AIDLL fault on one Rush map (a garbage navigation-map object) has no known cause yet.
@@ -236,5 +292,9 @@ About eight days of sessions (2026-10-03 to 10-10), most of it reverse engineeri
 - The human sees bots of his own side fire at him at the start of a round while he sits in a vehicle; the log
   of whom the bots fire at has shown the horn and two shots at enemies past him, nothing aimed at him yet.
 - Abilities rebuilt on the server (grenade dropped on death, throw-back grenade) are unverified with a human.
-- Ground vehicle gunners sense almost nobody; transport helicopters do not land to unload.
-- Whether a 1.65 client reacts correctly to the renumbered core event on a same-map round restart.
+- Ground vehicle gunners sense almost nobody. Helicopter pilots rarely fire while the host flies a circle.
+- The second round on the same map: the 1.65 client stays on its loading screen after a round's end; loading
+  the level again instead lost the server at its first real try.
+- Bots enter a vehicle, leave and enter again. The library's data gives every vehicle kind the same weights
+  (the "change vehicle" behaviour far above idling); crew weight sets per kind are installed, their effect is
+  not proven - a counter of what plan a bot had when it left a seat is the next measurement.
