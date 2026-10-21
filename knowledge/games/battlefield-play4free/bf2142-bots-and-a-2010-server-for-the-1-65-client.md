@@ -12,9 +12,9 @@ anti_cheat: "none in play: a private lab server for a game whose official servic
 status: in-progress
 agents: ["Claude Code (Opus 5.5)"]
 humans: []
-date: 2026-10-11
+date: 2026-10-21
 links: []
-tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion]
+tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion, ladders, reconstructed-source]
 ---
 
 # Battlefield 2142's bots inside Battlefield Play4Free, on a 2010 server taught to serve the 1.65 client
@@ -25,8 +25,8 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 > expects. It runs in the real game: a human plays rounds with 32 bots that fight, drive, fly, man fixed
 > weapons, use class gadgets, form squads under a commander and ferry each other by helicopter, on the game's
 > own levels (Rush included) and on about twenty converted Battlefield 2 levels. A copy for other people, with
-> the plugin's source, is made by a packaging script. Still in progress: vehicle gunners on the ground, the
-> second round on a map, bots that leave a vehicle they have just entered.
+> the plugin's source, is made by a packaging script. Still in progress: vehicle gunners on the ground, bots
+> that leave a vehicle they have just entered.
 
 ## Setup
 - **Game folder:** the 1.65 client files plus `BFP4f_w32ded.exe` of 2010-12-03, started by Warranty Voider's
@@ -278,9 +278,49 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
     where the sentence needs its sense kept - translating them was not what the human wanted), and a read-back
     that searches text files, executables and the text members of every archive for the profile path and a
     list of private words, and compiles every script of the copy.
+36. **The second round on the same map leaves the 1.65 client on its loading screen.** **Cause:** at a round's end
+    the 2010 server restarts the round in place (a "soft restart") unless its rounds-per-map counter says change
+    the map; the 1.65 client expects a level load. **Fix:** whenever a round ends, call the server's own "next map"
+    step with the same map as the next one - every round is a level load; the warmup that bots joining late start
+    again is ended by the host once enough players are there.
+37. **A reconstructed engine as the reference for a hand-made bridge.** Battlefield 2's engine was published
+    reconstructed from its binaries (OpenBF2). Its engine-side AI interfaces have the same virtual order as
+    Battlefield 2142's (the later game appended slots at the ends, or inserted one), and its headers give every
+    slot a MEANING the stripped binary never had. The comparison found: a slot that must return a float in ST0
+    answered with an integer in EAX (the library read an empty FPU register - NaN - and "our flag is being taken"
+    never fired), a template getter read two slots too far (every flag's radius -1, so "inside the flag's area"
+    never held), and spawn groups placed at their flag instead of at the mean of their spawn points (370 m off on
+    one level). **Method:** match slots by meaning and by the bytes each pops, not by index; confirm every finding
+    in the disassembly of the build that runs.
+38. **A widescreen squeeze of the HUD cuts text and stretches pictures at the screen edges.** **Cause:** the client
+    clips HUD text to the layout's sides (0 and 1280); a group shifted outward crosses that side, the part beyond
+    is cut, and a clipped quad gets a corner exactly on the screen edge, which the squeeze leaves where it is -
+    stretched. **Fix:** squeeze everything uniformly and keep the corner groups at their 4:3 places; moving them out
+    needs the clip rectangle itself (not found yet).
+39. **Ladders that are parts of objects are missing from the navigation mesh.** The editor exports only a level's
+    own ladder objects; an aircraft carrier's 25 ladders are children of its hull parts. **Fix:** their places from
+    the level's placement file times the parent templates' child entries (yaw only), their size from the ladder's
+    collision mesh, each joined to the mesh with two "ladder" triangles. The carrier's deck then stops being an
+    island: the library walks bots down through the ship to the sea and the boats by itself.
+40. **The server stops on "memory.dll: sanity check: block size ... doesn't seem sane".** **Cause:** two ladders
+    took the same 60-metre open edge of the mesh, so their triangles lay on top of each other (one edge shared by
+    four triangles); the library's path search first faulted in a bot's update, then asked for 100 MB. **Fix:** a
+    ladder joins a 1.5 m piece of the edge at its own place - the triangle that owns the edge is cut in three, so
+    the mesh stays whole - and its edges are closed for the next ladder; before packing, every mesh is checked for
+    triangles that are there twice and edges of three or more triangles, against the mesh that runs fine.
+41. **Bots fall from a deck on to a ledge 1.4 m lower and jump at the edge until they are removed.** **Cause:**
+    two thresholds of the host: "a ladder rises at least 1.5 m" (the ledge's ladders rise 1.4 - still more than a
+    soldier jumps) and "the bot's way is followed only in a plan called GotoWaypoints..." (the navigator holds a
+    way in other plans too, e.g. on the way to a vehicle). **Fix:** 1.2 m, above the jump height; any plan whose
+    way the navigator holds. A ladder the bot only brushed past lets him off at the end he got on at - otherwise
+    he goes up, his way sends him down, and the ladder takes him up again.
+42. **"Merging the client and server archives breaks the game"?** In this game's original install no file name is
+    in both halves (client: meshes, textures, sounds, shaders, fonts; server: .con / .tweak, collision meshes, AI,
+    animations, XML), the client mounts both, and the extension alone decides the half. Merging changes no
+    content; a split back can be done by extension.
 
 ## Cost and time
-About nine days of sessions (2026-10-03 to 10-11), most of it reverse engineering and measuring; no API spend.
+About nineteen days of sessions (2026-10-03 to 10-21), most of it reverse engineering and measuring; no API spend.
 
 ## Open questions
 - The first AIDLL fault on one Rush map (a garbage navigation-map object) has no known cause yet.
@@ -293,8 +333,7 @@ About nine days of sessions (2026-10-03 to 10-11), most of it reverse engineerin
   of whom the bots fire at has shown the horn and two shots at enemies past him, nothing aimed at him yet.
 - Abilities rebuilt on the server (grenade dropped on death, throw-back grenade) are unverified with a human.
 - Ground vehicle gunners sense almost nobody. Helicopter pilots rarely fire while the host flies a circle.
-- The second round on the same map: the 1.65 client stays on its loading screen after a round's end; loading
-  the level again instead lost the server at its first real try.
+- Where the client builds the HUD's clip rectangle (Gotcha 38) - with it the corner groups could go to the edges.
 - Bots enter a vehicle, leave and enter again. The library's data gives every vehicle kind the same weights
   (the "change vehicle" behaviour far above idling); crew weight sets per kind are installed, their effect is
   not proven - a counter of what plan a bot had when it left a seat is the next measurement.
