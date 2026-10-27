@@ -12,9 +12,9 @@ anti_cheat: "none in play: a private lab server for a game whose official servic
 status: in-progress
 agents: ["Claude Code (Opus 5.5)"]
 humans: []
-date: 2026-10-21
+date: 2026-10-28
 links: []
-tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion, ladders, reconstructed-source]
+tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version-mismatch, vtable-hooks, rtti, navmesh, reverse-engineering, crash-dumps, ballistics, level-conversion, ladders, reconstructed-source, direct3d9, shaders, shadows]
 ---
 
 # Battlefield 2142's bots inside Battlefield Play4Free, on a 2010 server taught to serve the 1.65 client
@@ -112,6 +112,15 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
 - **Battlefield 2 content converts.** Levels need the conquest layout rewritten for Play4Free's mode, the
   light settings lines the 1.65 renderer expects, strategic areas with neighbours for both home bases, and a
   generated navmesh; vehicles need Play4Free's camera and HUD lines and an AI template.
+- **Score lines are engine events, not script.** "Kill", "Destroyed Vehicle +50" and the like are in-game events
+  of an engine manager with their numbers in a settings file; the two builds agree on the numbers, but WHEN the
+  2010 server raises one can differ (Gotcha 46). The stock Python mode scripts only keep tickets.
+- **The renderer is Direct3D 9 behind one exported call.** Every device the client makes comes through
+  `Direct3DCreate9`, so one hook there reaches the device's vtable: anisotropic filtering (sampler states of
+  mipmapped colour textures only), a Direct3D 12 path through the system's D3D9On12 layer (Gotcha 52), pictures of
+  the back buffer on request. Anti-aliasing and sharpening belong in the game's own post-processing shader, which
+  runs before the HUD is drawn - a filter at Present would blur the HUD's text too. The shadows are one map the
+  engine fits around its casters; the plugin gives it four cascades around the camera instead (Gotcha 54).
 
 ## Build steps
 1. Build the plugin and copy it into the game folder as `p4fbots.plugindll`; settings live in an ini beside it.
@@ -141,9 +150,17 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
   refused 606 of 796 chances; judged by the library's own trigger wish it worked).
 - **A controller needs a trace line, not a look.** Half-second lines of wanted against actual (place, speed,
   attitude, sticks) for every helicopter the host flies turned one played round into the data for tuning.
+- **A table per battle.** Every death (place, side, vehicle, killer, weapon) and every destroyed vehicle goes to
+  a CSV from the mode's Python handlers; a report over it found what no single look shows (on one level a tenth
+  of one side's deaths had no killer: a squad posted on a hilltop drove its jeep up there and rolled - the rule
+  that sends only squads on foot to such posts took those deaths from 23 to 3).
+- **The human as the A/B judge.** When "everything got worse", all host additions to the AI were switched off for
+  one battle by a settings file (with a backup of the old values) and on again: the human judged the additions
+  smarter. Since then a "worse" is traced to the one addition that causes it, never answered by switching all off.
 - **Not verified:** the newest HUD events on screen, the core-event renumbering (never sent with one round per
   map), area heal, what a client sees of the commander's UAV, the corrected seating of Gotcha 19 on a client
-  (the guard's silence will show it), most converted levels beyond a bots-alone tour.
+  (the guard's silence will show it), most converted levels beyond a bots-alone tour; Gotchas 46, 50 and 54
+  are in the game but not yet seen by the human.
 
 ## Gotchas
 1. **The client sits at LOADING for ever after a loadout with many items.** **Cause:** the server's reliable
@@ -318,9 +335,75 @@ tags: [refractor-2, bots, ai-bridge, dedicated-server, network-protocol, version
     in both halves (client: meshes, textures, sounds, shaders, fonts; server: .con / .tweak, collision meshes, AI,
     animations, XML), the client mounts both, and the extension alone decides the half. Merging changes no
     content; a split back can be done by extension.
+43. **A bot spawned in a building pushes against a wall for ever.** **Cause:** the navmesh generator builds from an
+    object's AI collision mesh when it has one (it prefers it over the soldiers' and the vehicles' meshes), and
+    many buildings' AI meshes are a solid block without the floors inside - the mesh had only the roof above the
+    spawn point. **Fix:** for objects whose soldiers' collision has floors the AI mesh lacks, give the generator
+    the soldiers' mesh instead (generator input only; the game's files stay). A survey found 14-37 such object
+    kinds per level, an aircraft carrier's insides among them.
+44. **Bots at a base are given up on although the new mesh covers it.** **Cause:** the editor's quad-tree save
+    wrote polygon kind 0 for half of one level's polygons (its own text output had ground / water / ladder for
+    all); kind 0 hides a polygon from the library. **Fix:** copy the kinds back from the text output, and count
+    kind-0 polygons before packing any mesh. Making a long-hidden area walkable can wake a fault in the search:
+    after such a change run bots alone for a long time (one deck made walkable hung the server in the library's
+    open-list refill).
+45. **The server exits at the level's start after a Python handler was added.** **Cause:** the handler for
+    player deaths was registered before the mode's own scripts had set up theirs. **Fix:** register right after
+    the scripts register their own handler for the same event (wrap their registration). The engine's Python is
+    2.3 without the `os` module.
+46. **"Destroyed Vehicle +50" is paid many times for one vehicle.** **Cause:** the 2010 server raises that event
+    on every hit whose damage reaches the armour's hit points - also on a vehicle already destroyed; the 1.65
+    server code also asks that the vehicle had hit points left before the hit. **Fix:** the same test in front of
+    the old server's event. Read the condition in both exes, not the score settings.
+47. **The sight jerks while turning only with a widened field of view.** **Cause:** the engine scales mouse
+    speed by player field of view / camera field of view whenever the camera is wider; the client's camera had
+    the player's wider view, the server's cameras never went over the default 1.1, so the two simulations turned
+    by different amounts and the server corrected the client. **Fix:** on both sides compute the scale with
+    min(camera field of view, 1.1). Confirmed by the human.
+48. **A weapon's magazine flickers empty - full - empty after a reload.** **Cause:** the 2010 server's ammunition
+    component starts the reload pause at the tick it is ASKED, and the engine asks again a few seconds into the
+    pause when the player switches weapons; the 1.65 client counts the pause from the last shot. **Fix:** count
+    it from the last shot on the server. A supply point refilling round by round is a second source of the same
+    picture (still open for one aircraft).
+49. **A late joiner sees no ring and no icon over neutral flags.** **Cause:** the renderer draws a control
+    point's frame and its world icon only after the client's "set team" ran for it; the round's reset runs it for
+    every point, but a client joining later gets a team only where it differs from the first state - a neutral
+    point never. **Fix:** the client's "team was set" query answers yes. Confirmed by the human.
+50. **Bots throw grenades with no enemy in sight.** **Cause:** this game's hand grenade fires the moment it is
+    taken in hand (fire on enable, no delay), and the library's item choice in plans that are not combat - on
+    the way to a vehicle, a medic going to a wounded man on a ladder - can pick it. **Fix:** each plan may take
+    out only its own item (the medic his medic kit, the resupply plan its ammunition bag), and in combat a thrown
+    item only while the target is within that item's reach (grenades were thrown at vehicles 70-90 m off).
+51. **The library faults when told of a hit.** **Cause:** its per-side lists are indexed by the side without a
+    check, and a vehicle's AI object had side 0 in the tick a human got in. **Fix:** tell only hits whose shooter
+    and victim are on side 1 or 2, and log the ones left out - that log named the cause.
+52. **Direct3D 12 through D3D9On12: a black window, no loading picture.** `Direct3DCreate9On12` makes the game run
+    on Direct3D 12 in full screen. In the game's own window nothing reaches the screen (the frame is in the back
+    buffer; a test popup with the same parameters shows it); a device made by plain Direct3D 9 under the
+    D3D9On12 object crashed the renderer. **Fix:** decide by the command line - a client started in a window gets
+    plain Direct3D 9. With anisotropic filtering forced, return the game's own values when it reads its sampler
+    states back, and leave render targets and depth / shadow formats alone.
+53. **A post-processing shader that compiles with today's compiler is refused by the game.** **Cause:** the game
+    compiles its effects at run time with its own old D3DX, which rejects a function with a return inside an
+    `if` (fxc accepts it). **Fix:** branch-free code (step / lerp), and test every shader with the game's own D3DX
+    DLL in a small harness before it goes into the archive. A runtime on / off switch: a sampler stage the effect
+    does not use, bound by the plugin to a 1 x 1 texture, read by the shader as a blend factor.
+54. **Shadows end 100 m from the camera** (a vehicle has one, the next one a little farther has none). **Cause:**
+    four cascades in one map, each a fixed share of the coarsest square, and the coarsest square IS the shadow
+    distance. **Fix:** a longer distance with the two nearest squares kept where they were (5 and 12.5 m) and the
+    third between them and the farthest. Every share must stay a whole number: the cascades' centre moves in whole
+    pixels of the coarsest square, which must be whole pixels of every cascade too, or the shadows crawl.
+55. **One side's commander goes silent halfway through a round.** **Cause:** the library draws a strategy at
+    random, weighted, among those whose conditions hold - and a "flag difference smaller than -1" is strict, so a
+    side behind by exactly one flag had no strategy at all. **Fix:** thresholds half-way between whole numbers
+    (+-0.5) and a catch-all strategy with an always-true condition and a tiny weight; check that every flag
+    balance leaves at least one strategy. The running strategy cannot be asked from the console - log the
+    commander's orders instead.
 
 ## Cost and time
-About nineteen days of sessions (2026-10-03 to 10-21), most of it reverse engineering and measuring; no API spend.
+About twenty-six days of sessions (2026-10-03 to 10-28), most of it reverse engineering and measuring; from
+10-22 several agent sessions at once (infantry, vehicles, general AI, research), each owning its part of the
+source and telling the others before it builds; no API spend.
 
 ## Open questions
 - The first AIDLL fault on one Rush map (a garbage navigation-map object) has no known cause yet.
@@ -337,3 +420,7 @@ About nineteen days of sessions (2026-10-03 to 10-21), most of it reverse engine
 - Bots enter a vehicle, leave and enter again. The library's data gives every vehicle kind the same weights
   (the "change vehicle" behaviour far above idling); crew weight sets per kind are installed, their effect is
   not proven - a counter of what plan a bot had when it left a seat is the next measurement.
+- Once, a client started in a window had Direct3D 9 refuse to make its device three times (each with fewer
+  hardware flags) and then crashed; the next start was fine. The error code is logged now.
+- The library's own squad formation is alive (about two thirds of the asks say "keep your slot"), but its slots
+  were some 26 m from the squad leader the host chose - whom it anchors on is not known.
