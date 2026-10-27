@@ -496,7 +496,7 @@
    "Claude Code (Opus 5.5)"
   ],
   "humans": [],
-  "date": "2026-10-21",
+  "date": "2026-10-28",
   "links": [],
   "tags": [
    "refractor-2",
@@ -511,7 +511,12 @@
    "reverse-engineering",
    "crash-dumps",
    "ballistics",
-   "level-conversion", "ladders", "reconstructed-source"
+   "level-conversion",
+   "ladders",
+   "reconstructed-source",
+   "direct3d9",
+   "shaders",
+   "shadows"
   ]
  },
  {
